@@ -1,0 +1,131 @@
+---
+title: "BloNo Boundaries"
+author: "Noah Anderson"
+date: "2023-05-15"
+output: pdf_document
+---
+
+
+```{r}
+options(scipen=999)
+library(tidyverse)
+library(sf)
+library(gridExtra)
+library(grid)
+library(tidycensus)
+library(cartography)
+
+source("https://raw.githubusercontent.com/urbanSpatial/Public-Policy-Analytics-Landing/master/functions.r")
+```
+
+```{r}
+BloomingtonBoundary<- st_read("https://raw.githubusercontent.com/noahba65/BloNoUrbanGrowth/main/Data/Corporate_Limits.geojson") %>%
+  filter(CORP_NAME == "Bloomington") %>%
+  st_transform('ESRI:102728') %>% 
+  select(geometry) %>%
+  st_sf() 
+
+
+# Turns the shape file for Downtown Bloomington to create an approximate historical City center
+DowntownCenter <- st_centroid(st_read("https://raw.githubusercontent.com/noahba65/BloNoUrbanGrowth/main/Data/downtown_center.geojson") %>%
+  st_transform('ESRI:102728')) %>%st_sf()
+
+```
+
+
+# Plotting a Bid Rent Curve for McLean County
+```{r}
+McLeanHousing <-get_acs(geography = "block group", variables = "B25001_001", state = "IL", 
+                         county = "McLean", geometry = TRUE, year = 2019) %>% 
+  st_transform('ESRI:102728') %>%
+  select(geometry,estimate,GEOID) %>%
+    rename(NumberOfHouses = estimate) %>%
+  mutate(Area = as.numeric(st_area(.)),HousingDensity = NumberOfHouses/Area)
+
+
+
+McLeanHousingCentroids <- st_centroid(McLeanHousing) %>%
+  select(GEOID, geometry, Area, NumberOfHouses, HousingDensity) %>%
+  mutate(Distance = as.numeric(st_distance(geometry,DowntownCenter))/5280) 
+
+ggplot() +
+  geom_point(data = McLeanHousingCentroids, aes(x = Distance, y = HousingDensity)) +
+  geom_smooth(data = McLeanHousingCentroids , aes(x = Distance, y = HousingDensity)) +
+  xlim(0,9)
+```
+The two outliers are associated with Uptown Normal.
+
+
+
+
+
+# Selecting Bloomington Housing
+Looking only at Bloomington, I will create custom shape files for outer and inner boundaries 
+
+A big problem is that four of the block groups have centroids outside of Bloomington, but all the housing is inside. To account for this I will make another data frame with the four important block groups.
+```{r}
+# Creating a dataframe for Bloomington block groups only
+BloomingtonHousing <- st_intersection(McLeanHousing,BloomingtonBoundary)
+
+
+# Reducing each block group down to a point using the centroid method
+BloomingtonCentroids <- st_intersection(McLeanHousingCentroids,BloomingtonHousing) %>%
+  select(GEOID, geometry, Area, NumberOfHouses, HousingDensity, Distance)
+  
+# These are the GEOID's that have Areas that spill into unincorporated and uninhabited McLean county
+EdgeCases <- list(171130051011, 171130051012, 171130021012, 171130011043)
+
+# Creating a dataframe for block groups with the edge case GEOID's
+EdgeHousing <- McLeanHousing %>%
+  filter( GEOID %in% EdgeCases) %>%
+  select(GEOID,geometry,NumberOfHouses)
+
+# Selecting the portion of these edge cases that fall within Bloomington
+EdgeBloomingtonHousing <- EdgeHousing %>%
+  st_intersection(BloomingtonBoundary,EdgeBloomington) %>%
+  
+  # recalculating housing density and area since the area has changed. 
+  mutate(Area = as.numeric(st_area(.)),HousingDensity = NumberOfHouses/Area)
+
+# Creating centroids for the newly cropped edge case block groups
+EdgeCentroids <- st_centroid(EdgeBloomingtonHousing) %>%
+  mutate(Distance = as.numeric(st_distance(geometry,DowntownCenter))/5280) 
+
+BloomingtonCentroids <- rbind(BloomingtonCentroids, EdgeCentroids)
+
+ggplot() +
+  geom_sf(data = BloomingtonHousing) +
+  geom_sf(data = EdgeBloomingtonHousing, fill = "red") +
+  geom_sf(data = EdgeCentroids)
+
+ggplot() + 
+  geom_point(data = BloomingtonCentroids, aes(x = Distance, y = HousingDensity)) +
+  geom_smooth(data = BloomingtonCentroids, aes(x = Distance, y = HousingDensity)) +
+  xlim(0,5) 
+```
+# Analyzing development outside of Veterans
+
+I need to investigate the long skinny outside east peninsula. Was this the anexation?
+```{r}
+OutsideVeteransGroups <- list(171130051012, 171130051011, 171130011062, 171130011041, 171130011061, 171130054001, 171130011031, 171130005051, 171130011032, 171130051025, 171130011042, 171130011051, 171130005042, 171130011043, 171130011052, 171130021011, 171130021012)
+
+OutsideVeterans <- BloomingtonHousing %>%
+  filter(GEOID %in% OutsideVeteransGroups)
+
+OutsideVeteransUnion <- st_union(OutsideVeterans) 
+
+
+OutsideVeteransCentroids <- st_intersection(OutsideVeterans, BloomingtonCentroids)
+
+sum(OutsideVeteransCentroids$NumberOfHouses)/st_area(OutsideVeteransUnion)
+
+                                  
+
+
+
+ggplot() +
+  geom_sf(data = BloomingtonHousing) +
+  geom_sf(data = OutsideVeteransUnion, fill = "red") +
+  geom_sf(data = BloomingtonCentroids) +
+  geom_sf(data = OutsideVeteransCentroids, color = "white")
+```
