@@ -36,7 +36,7 @@ DowntownCenter <- st_centroid(st_read("https://raw.githubusercontent.com/noahba6
 # Plotting a Bid Rent Curve for McLean County
 ```{r}
 McLeanHousing <-get_acs(geography = "block group", variables = "B25001_001", state = "IL", 
-                         county = "McLean", geometry = TRUE, year = 2019) %>% 
+                         county = "McLean", geometry = TRUE, year = 2021) %>% 
   st_transform('ESRI:102728') %>%
   select(geometry,estimate,GEOID) %>%
     rename(NumberOfHouses = estimate) %>%
@@ -63,46 +63,65 @@ The two outliers are associated with Uptown Normal.
 Looking only at Bloomington, I will create custom shape files for outer and inner boundaries 
 
 A big problem is that four of the block groups have centroids outside of Bloomington, but all the housing is inside. To account for this I will make another data frame with the four important block groups.
+
+
+# Pulling data from three studies
+totalpop <- map_df(us, function(x) {
+  get_acs(geography = "tract", variables = "B01003_001", 
+          state = x)
+})
+
+get_acs(geography = "block group", variables = "B25001_001", state = "IL", 
+                         county = "McLean", geometry = TRUE, year = 2019) %>% 
+  st_transform('ESRI:102728')
 ```{r}
-# Creating a dataframe for Bloomington block groups only
-BloomingtonHousing <- st_intersection(McLeanHousing,BloomingtonBoundary)
+StudyYears <- c(2016,2021)
 
-
-# Reducing each block group down to a point using the centroid method
-BloomingtonCentroids <- st_intersection(McLeanHousingCentroids,BloomingtonHousing) %>%
-  select(GEOID, geometry, Area, NumberOfHouses, HousingDensity, Distance)
-  
-# These are the GEOID's that have Areas that spill into unincorporated and uninhabited McLean county
-EdgeCases <- list(171130051011, 171130051012, 171130021012, 171130011043)
-
-# Creating a dataframe for block groups with the edge case GEOID's
-EdgeHousing <- McLeanHousing %>%
-  filter( GEOID %in% EdgeCases) %>%
-  select(GEOID,geometry,NumberOfHouses)
-
-# Selecting the portion of these edge cases that fall within Bloomington
-EdgeBloomingtonHousing <- EdgeHousing %>%
-  st_intersection(BloomingtonBoundary,EdgeBloomington) %>%
-  
-  # recalculating housing density and area since the area has changed. 
+McLeanHousingList <- map(StudyYears, function(x){
+  get_acs(geography = "block group", variables = "B25001_001", state = "IL", 
+                         county = "McLean", geometry = TRUE, year = x)%>% 
+  st_transform('ESRI:102728') %>%
+  select(geometry,estimate,GEOID) %>%
+    rename(NumberOfHouses = estimate) %>%
   mutate(Area = as.numeric(st_area(.)),HousingDensity = NumberOfHouses/Area)
+})
 
-# Creating centroids for the newly cropped edge case block groups
-EdgeCentroids <- st_centroid(EdgeBloomingtonHousing) %>%
-  mutate(Distance = as.numeric(st_distance(geometry,DowntownCenter))/5280) 
 
-BloomingtonCentroids <- rbind(BloomingtonCentroids, EdgeCentroids)
 
-ggplot() +
-  geom_sf(data = BloomingtonHousing) +
-  geom_sf(data = EdgeBloomingtonHousing, fill = "red") +
-  geom_sf(data = EdgeCentroids)
+View(McLeanHousing.df)
+McLeanHousingCentroidsList <- map(McLeanHousingList, function(x){
+  st_centroid(x) %>%
+  select(GEOID, geometry, Area, NumberOfHouses, HousingDensity) %>%
+  mutate(Distance = as.numeric(st_distance(geometry,DowntownCenter))/5280)
+})
 
-ggplot() + 
-  geom_point(data = BloomingtonCentroids, aes(x = Distance, y = HousingDensity)) +
-  geom_smooth(data = BloomingtonCentroids, aes(x = Distance, y = HousingDensity)) +
-  xlim(0,5) 
+BloomingtonHousingList <- map(McLeanHousingList, function(x){
+  st_intersection(x, BloomingtonBoundary)
+})
+
+
+map(McLeanHousingCentroidsList, function(x){ ggplot() +
+  geom_point(data = x, aes(x = Distance, y = HousingDensity)) +
+  geom_smooth(data = x , aes(x = Distance, y = HousingDensity)) +
+  xlim(0,9)
+})
 ```
+# Outside Veterans
+```{r}
+BloomingtonHousingList <- map(McLeanHousingList, function(x){
+  st_intersection(x, BloomingtonBoundary)
+})
+
+BloomingtonCentroidsList <- map(McLeanHousingCentroidsList, function(x){
+  st_intersection(x, BloomingtonBoundary)
+})
+
+
+
+
+```
+
+
 # Analyzing development outside of Veterans
 
 I need to investigate the long skinny outside east peninsula. Was this the anexation?
@@ -125,7 +144,5 @@ sum(OutsideVeteransCentroids$NumberOfHouses)/st_area(OutsideVeteransUnion)
 
 ggplot() +
   geom_sf(data = BloomingtonHousing) +
-  geom_sf(data = OutsideVeteransUnion, fill = "red") +
-  geom_sf(data = BloomingtonCentroids) +
-  geom_sf(data = OutsideVeteransCentroids, color = "white")
+  geom_sf(data = BloomingtonCentroids)
 ```
